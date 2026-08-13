@@ -441,3 +441,45 @@ grant execute on function delete_playlist_track to anon;
 ```
 
 이제 프로필 아래에 재생 바(◀◀ ▶ ▶▶ + 곡 제목/가수 + ⋯)가 생겨요. 관리자로 로그인한 상태에서 ⋯를 누르면 플레이리스트가 펼쳐지고 "+ 곡 추가" 버튼이 보여요. 유튜브 URL만 넣으면 제목·가수를 자동으로 가져오고(직접 수정도 가능), 방문자는 재생만 할 수 있고 곡 추가·삭제는 관리자만 할 수 있어요.
+
+## 8. (추가 기능) 게시물 사진 최대 4장 첨부
+
+새 쿼리 창에 아래 SQL을 실행해주세요. 기존 게시물의 사진(1장)은 자동으로 그대로 유지돼요.
+
+```sql
+alter table posts add column if not exists image_urls text[] not null default '{}';
+
+update posts set image_urls = array[image_url]
+where image_url is not null and image_url <> '' and coalesce(array_length(image_urls, 1), 0) = 0;
+
+drop function if exists create_post(text, text, text);
+
+create or replace function create_post(p_message text, p_image_urls text[], p_passcode text)
+returns bigint
+language plpgsql
+security definer
+as $$
+declare ok boolean;
+declare new_id bigint;
+begin
+  select (passcode_hash = crypt(p_passcode, passcode_hash)) into ok
+  from profile where id = 1;
+  if not coalesce(ok, false) then
+    raise exception 'invalid passcode';
+  end if;
+  if char_length(p_message) < 1 or char_length(p_message) > 280 then
+    raise exception 'invalid message';
+  end if;
+  if coalesce(array_length(p_image_urls, 1), 0) > 4 then
+    raise exception 'too many images';
+  end if;
+
+  insert into posts (message, image_urls) values (p_message, coalesce(p_image_urls, '{}'))
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+grant execute on function create_post(text, text[], text) to anon;
+```
+
+이제 게시물 작성 창에서 사진을 최대 4장까지 첨부할 수 있고, 게시물 목록에서 트위터처럼 장 수에 맞는 그리드로 보여요 (1장은 그대로, 2~4장은 격자).

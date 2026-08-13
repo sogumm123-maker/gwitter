@@ -131,8 +131,6 @@ const els = {
   postMediaBtn: document.getElementById('postMediaBtn'),
   postMediaInput: document.getElementById('postMediaInput'),
   postMediaPreview: document.getElementById('postMediaPreview'),
-  postMediaPreviewImg: document.getElementById('postMediaPreviewImg'),
-  postMediaRemoveBtn: document.getElementById('postMediaRemoveBtn'),
 
   entries: document.getElementById('entries'),
   guestForm: document.getElementById('guestForm'),
@@ -303,6 +301,15 @@ function renderEntries(rows) {
   `).join('');
 }
 
+function renderPostImages(row) {
+  const urls = row.image_urls && row.image_urls.length ? row.image_urls : (row.image_url ? [row.image_url] : []);
+  if (!urls.length) return '';
+  if (urls.length === 1) {
+    return `<img class="entry-image" src="${urls[0]}" alt="첨부 이미지" loading="lazy" />`;
+  }
+  return `<div class="post-images count-${urls.length}">${urls.map((u) => `<img src="${u}" alt="첨부 이미지" loading="lazy" />`).join('')}</div>`;
+}
+
 function renderPosts(rows) {
   lastPostsData = rows;
   if (!rows.length) {
@@ -323,7 +330,7 @@ function renderPosts(rows) {
           ${isAdmin() ? `<span class="entry-owner-actions"><button class="post-del" data-id="${row.id}" type="button" title="삭제">삭제</button></span>` : ''}
         </div>
         <p class="entry-msg">${escapeHtml(row.message)}</p>
-        ${row.image_url ? `<img class="entry-image" src="${row.image_url}" alt="첨부 이미지" loading="lazy" />` : ''}
+        ${renderPostImages(row)}
       </div>
     </li>
   `).join('');
@@ -376,7 +383,7 @@ async function loadPosts() {
   }
   const { data, error } = await client
     .from('posts')
-    .select('id, message, image_url, created_at')
+    .select('id, message, image_url, image_urls, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) {
@@ -954,39 +961,64 @@ els.pMessage.addEventListener('input', () => {
   els.postCharCount.textContent = `${els.pMessage.value.length} / 280`;
 });
 
-let selectedPostImageFile = null;
-let selectedPostImageDataUrl = null;
+const MAX_POST_IMAGES = 4;
+let selectedPostImages = []; // { file, dataUrl }
+
+function renderPostMediaPreview() {
+  if (!selectedPostImages.length) {
+    els.postMediaPreview.hidden = true;
+    els.postMediaPreview.innerHTML = '';
+  } else {
+    els.postMediaPreview.hidden = false;
+    els.postMediaPreview.innerHTML = selectedPostImages.map((item, i) => `
+      <div class="media-preview-item">
+        <img src="${item.dataUrl}" alt="첨부 이미지 미리보기" />
+        <button type="button" class="media-remove" data-index="${i}" aria-label="이미지 제거">✕</button>
+      </div>
+    `).join('');
+  }
+  els.postMediaBtn.disabled = selectedPostImages.length >= MAX_POST_IMAGES;
+}
 
 els.postMediaBtn.addEventListener('click', () => els.postMediaInput.click());
 
 els.postMediaInput.addEventListener('change', () => {
-  const file = els.postMediaInput.files[0];
-  if (!file) return;
-  if (file.size > 5 * 1024 * 1024) {
-    els.postFormMsg.textContent = '이미지는 5MB 이하로 올려주세요.';
-    els.postMediaInput.value = '';
-    return;
-  }
-  els.postFormMsg.textContent = '';
-  selectedPostImageFile = file;
-  const reader = new FileReader();
-  reader.onload = () => {
-    selectedPostImageDataUrl = reader.result;
-    els.postMediaPreviewImg.src = selectedPostImageDataUrl;
-    els.postMediaPreview.hidden = false;
-  };
-  reader.readAsDataURL(file);
+  const files = [...els.postMediaInput.files];
+  els.postMediaInput.value = '';
+  if (!files.length) return;
+
+  const remaining = MAX_POST_IMAGES - selectedPostImages.length;
+  const toAdd = files.slice(0, remaining);
+  els.postFormMsg.textContent = files.length > remaining
+    ? `사진은 최대 ${MAX_POST_IMAGES}장까지 첨부할 수 있어요.`
+    : '';
+
+  toAdd.forEach((file) => {
+    if (file.size > 5 * 1024 * 1024) {
+      els.postFormMsg.textContent = '이미지는 5MB 이하로 올려주세요.';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      selectedPostImages.push({ file, dataUrl: reader.result });
+      renderPostMediaPreview();
+    };
+    reader.readAsDataURL(file);
+  });
+});
+
+els.postMediaPreview.addEventListener('click', (e) => {
+  const btn = e.target.closest('.media-remove');
+  if (!btn) return;
+  selectedPostImages.splice(Number(btn.dataset.index), 1);
+  renderPostMediaPreview();
 });
 
 function clearPostMediaSelection() {
-  selectedPostImageFile = null;
-  selectedPostImageDataUrl = null;
+  selectedPostImages = [];
   els.postMediaInput.value = '';
-  els.postMediaPreview.hidden = true;
-  els.postMediaPreviewImg.src = '';
+  renderPostMediaPreview();
 }
-
-els.postMediaRemoveBtn.addEventListener('click', clearPostMediaSelection);
 
 els.postForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1013,16 +1045,16 @@ els.postForm.addEventListener('submit', async (e) => {
     rows.push({
       id: Date.now(),
       message,
-      image_url: selectedPostImageDataUrl || '',
+      image_urls: selectedPostImages.map((item) => item.dataUrl),
       created_at: new Date().toISOString(),
     });
     demoSavePosts(rows);
   } else {
-    let imageUrl = '';
-    if (selectedPostImageFile) {
-      const ext = (selectedPostImageFile.name.split('.').pop() || 'jpg').toLowerCase();
+    const imageUrls = [];
+    for (const item of selectedPostImages) {
+      const ext = (item.file.name.split('.').pop() || 'jpg').toLowerCase();
       const path = `posts/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: uploadError } = await client.storage.from('guestbook-images').upload(path, selectedPostImageFile);
+      const { error: uploadError } = await client.storage.from('guestbook-images').upload(path, item.file);
       if (uploadError) {
         console.error(uploadError);
         els.postSubmitBtn.disabled = false;
@@ -1030,12 +1062,12 @@ els.postForm.addEventListener('submit', async (e) => {
         return;
       }
       const { data: pub } = client.storage.from('guestbook-images').getPublicUrl(path);
-      imageUrl = pub.publicUrl;
+      imageUrls.push(pub.publicUrl);
     }
 
     const { data, error } = await client.rpc('create_post', {
       p_message: message,
-      p_image_url: imageUrl,
+      p_image_urls: imageUrls,
       p_passcode: passcode,
     });
     if (error || !data) {
