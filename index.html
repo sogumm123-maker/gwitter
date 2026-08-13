@@ -167,9 +167,19 @@
         <input id="fJoined" maxlength="40" placeholder="예: 2021년부터" />
       </div>
       <div class="field">
-        <label for="fAvatar">프로필 사진 URL</label>
-        <input id="fAvatar" placeholder="https://..." />
-        <p class="field-hint">이미지 URL이 없으면 이니셜 아바타가 표시돼요.</p>
+        <label>프로필 사진</label>
+        <div class="avatar-upload">
+          <div class="avatar-upload-preview" id="fAvatarPreview">
+            <span id="fAvatarEmptyText">?</span>
+            <img id="fAvatarPreviewImg" alt="프로필 사진 미리보기" hidden />
+          </div>
+          <div class="avatar-upload-actions">
+            <button type="button" class="btn-secondary" id="fAvatarPickBtn">사진 선택</button>
+            <button type="button" class="btn-secondary" id="fAvatarRemoveBtn" hidden>제거</button>
+          </div>
+          <input type="file" id="fAvatarInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        </div>
+        <p class="field-hint">권장 크기 400×400px 정사각형, 5MB 이하. 사진 없으면 이니셜 아바타가 표시돼요.</p>
       </div>
 
       <div class="field">

@@ -159,7 +159,12 @@ const els = {
   fBio: document.getElementById('fBio'),
   fLocation: document.getElementById('fLocation'),
   fJoined: document.getElementById('fJoined'),
-  fAvatar: document.getElementById('fAvatar'),
+  fAvatarPreview: document.getElementById('fAvatarPreview'),
+  fAvatarPreviewImg: document.getElementById('fAvatarPreviewImg'),
+  fAvatarEmptyText: document.getElementById('fAvatarEmptyText'),
+  fAvatarPickBtn: document.getElementById('fAvatarPickBtn'),
+  fAvatarRemoveBtn: document.getElementById('fAvatarRemoveBtn'),
+  fAvatarInput: document.getElementById('fAvatarInput'),
   fCoverPreview: document.getElementById('fCoverPreview'),
   fCoverPreviewImg: document.getElementById('fCoverPreviewImg'),
   fCoverEmptyText: document.getElementById('fCoverEmptyText'),
@@ -1050,6 +1055,48 @@ els.posts.addEventListener('click', async (e) => {
 
 /* ---- profile edit ---- */
 
+let selectedAvatarFile = null;
+let avatarRemoved = false;
+
+function setAvatarPreview(url) {
+  if (url) {
+    els.fAvatarPreviewImg.src = url;
+    els.fAvatarPreviewImg.hidden = false;
+    els.fAvatarEmptyText.hidden = true;
+    els.fAvatarRemoveBtn.hidden = false;
+  } else {
+    els.fAvatarPreviewImg.src = '';
+    els.fAvatarPreviewImg.hidden = true;
+    els.fAvatarEmptyText.hidden = false;
+    els.fAvatarRemoveBtn.hidden = true;
+  }
+}
+
+els.fAvatarPickBtn.addEventListener('click', () => els.fAvatarInput.click());
+
+els.fAvatarInput.addEventListener('change', () => {
+  const file = els.fAvatarInput.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    els.editMsg.textContent = '이미지는 5MB 이하로 올려주세요.';
+    els.fAvatarInput.value = '';
+    return;
+  }
+  els.editMsg.textContent = '';
+  selectedAvatarFile = file;
+  avatarRemoved = false;
+  const reader = new FileReader();
+  reader.onload = () => setAvatarPreview(reader.result);
+  reader.readAsDataURL(file);
+});
+
+els.fAvatarRemoveBtn.addEventListener('click', () => {
+  selectedAvatarFile = null;
+  avatarRemoved = true;
+  els.fAvatarInput.value = '';
+  setAvatarPreview('');
+});
+
 let selectedCoverFile = null;
 let coverRemoved = false;
 
@@ -1099,9 +1146,12 @@ function openEditPanel() {
     els.fBio.value = currentProfile.bio || '';
     els.fLocation.value = currentProfile.location || '';
     els.fJoined.value = currentProfile.joined_label || '';
-    els.fAvatar.value = currentProfile.avatar_url || '';
+    setAvatarPreview(currentProfile.avatar_url || '');
     setCoverPreview(currentProfile.cover_url || '');
   }
+  selectedAvatarFile = null;
+  avatarRemoved = false;
+  els.fAvatarInput.value = '';
   selectedCoverFile = null;
   coverRemoved = false;
   els.fCoverInput.value = '';
@@ -1135,6 +1185,27 @@ els.editForm.addEventListener('submit', async (e) => {
   els.editMsg.textContent = '';
   els.editMsg.classList.remove('ok');
 
+  let avatarUrl = currentProfile?.avatar_url || '';
+  if (avatarRemoved) avatarUrl = '';
+
+  if (selectedAvatarFile) {
+    if (DEMO_MODE) {
+      avatarUrl = els.fAvatarPreviewImg.src;
+    } else {
+      const ext = (selectedAvatarFile.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `avatar/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: uploadError } = await client.storage.from('guestbook-images').upload(path, selectedAvatarFile);
+      if (uploadError) {
+        console.error(uploadError);
+        els.editSaveBtn.disabled = false;
+        els.editMsg.textContent = '프로필 사진 업로드에 실패했어요. 잠시 후 다시 시도해주세요.';
+        return;
+      }
+      const { data: pub } = client.storage.from('guestbook-images').getPublicUrl(path);
+      avatarUrl = pub.publicUrl;
+    }
+  }
+
   let coverUrl = currentProfile?.cover_url || '';
   if (coverRemoved) coverUrl = '';
 
@@ -1161,7 +1232,7 @@ els.editForm.addEventListener('submit', async (e) => {
     handle: els.fHandle.value.trim().replace(/^@/, ''),
     bio: els.fBio.value.trim(),
     location: els.fLocation.value.trim(),
-    avatar_url: els.fAvatar.value.trim(),
+    avatar_url: avatarUrl,
     cover_url: coverUrl,
     joined_label: els.fJoined.value.trim(),
   };
