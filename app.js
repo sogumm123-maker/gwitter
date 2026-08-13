@@ -107,7 +107,6 @@ const els = {
   bio: document.getElementById('bio'),
   meta: document.getElementById('meta'),
 
-  adminLoginBtn: document.getElementById('adminLoginBtn'),
   adminControls: document.getElementById('adminControls'),
   logoutBtn: document.getElementById('logoutBtn'),
 
@@ -751,14 +750,14 @@ els.playlistAddBtn.addEventListener('click', async () => {
 
 function applyAdminVisibility() {
   const admin = isAdmin();
-  els.adminLoginBtn.hidden = admin;
   els.adminControls.hidden = !admin;
   els.postForm.hidden = !admin;
   renderPosts(lastPostsData);
   renderPlaylist(playlistTracks);
 }
 
-els.adminLoginBtn.addEventListener('click', async () => {
+async function promptAdminLogin() {
+  if (isAdmin()) return;
   const passcode = window.prompt('관리자 비밀번호를 입력하세요.');
   if (!passcode) return;
 
@@ -779,6 +778,19 @@ els.adminLoginBtn.addEventListener('click', async () => {
   }
   setAdmin(true);
   applyAdminVisibility();
+}
+
+/* 이름을 5번 빠르게 탭하면 관리자 로그인창이 떠요 (비밀 트리거) */
+let nameTapCount = 0;
+let nameTapTimer = null;
+els.name.addEventListener('click', () => {
+  nameTapCount += 1;
+  clearTimeout(nameTapTimer);
+  nameTapTimer = setTimeout(() => { nameTapCount = 0; }, 1500);
+  if (nameTapCount >= 5) {
+    nameTapCount = 0;
+    promptAdminLogin();
+  }
 });
 
 els.logoutBtn.addEventListener('click', () => {
