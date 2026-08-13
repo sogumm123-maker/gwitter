@@ -658,6 +658,16 @@ body {
 .entry-edit:hover { color: var(--accent); }
 .entry-del:hover { color: var(--danger); }
 
+.post-del {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.post-del:hover { color: var(--accent-strong); }
+
 .entry-actions {
   display: flex;
   align-items: center;

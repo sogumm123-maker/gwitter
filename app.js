@@ -1247,6 +1247,7 @@ els.editForm.addEventListener('submit', async (e) => {
     els.editMsg.textContent = '저장되었어요.';
     els.editMsg.classList.add('ok');
     await loadProfile();
+    renderPosts(lastPostsData);
     setTimeout(closeEditPanel, 600);
     return;
   }
@@ -1277,6 +1278,7 @@ els.editForm.addEventListener('submit', async (e) => {
   els.editMsg.textContent = '저장되었어요.';
   els.editMsg.classList.add('ok');
   await loadProfile();
+  renderPosts(lastPostsData);
   setTimeout(closeEditPanel, 600);
 });
 
@@ -1288,7 +1290,6 @@ if (DEMO_MODE) {
 }
 
 applyAdminVisibility();
-loadProfile();
+loadProfile().then(loadPosts);
 loadEntries();
-loadPosts();
 loadPlaylist();
