@@ -110,6 +110,7 @@ const els = {
   playBtn: document.getElementById('playBtn'),
   nextBtn: document.getElementById('nextBtn'),
   playerTitle: document.getElementById('playerTitle'),
+  playerTitleInner: document.getElementById('playerTitleInner'),
   playerArtist: document.getElementById('playerArtist'),
   playerMoreBtn: document.getElementById('playerMoreBtn'),
   playlistPanel: document.getElementById('playlistPanel'),
@@ -412,7 +413,7 @@ function renderPlaylist(rows) {
   els.nextBtn.disabled = !hasTracks;
 
   if (currentTrackIndex === -1 || !rows.length) {
-    els.playerTitle.textContent = hasTracks ? '재생할 곡을 골라보세요' : '재생할 곡이 없어요';
+    setPlayerTitle(hasTracks ? '재생할 곡을 골라보세요' : '재생할 곡이 없어요');
     els.playerArtist.textContent = '';
   }
 }
@@ -466,8 +467,28 @@ function pauseIcon() {
   return '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
 }
 
+const PLAYER_TITLE_SCROLL_THRESHOLD = 16;
+
+function setPlayerTitle(text) {
+  const safe = escapeHtml(text);
+  if (text.length > PLAYER_TITLE_SCROLL_THRESHOLD) {
+    els.playerTitleInner.innerHTML = `
+      <span class="player-title-text">${safe}<span class="player-title-gap"></span></span>
+      <span class="player-title-text" aria-hidden="true">${safe}<span class="player-title-gap"></span></span>
+    `;
+    els.playerTitleInner.classList.add('is-overflowing');
+  } else {
+    els.playerTitleInner.innerHTML = `<span class="player-title-text">${safe}</span>`;
+    els.playerTitleInner.classList.remove('is-overflowing');
+  }
+}
+
+function setPlayingIndicator(isPlaying) {
+  els.playerTitleInner.classList.toggle('is-playing', isPlaying);
+}
+
 function updatePlayerMeta(track) {
-  els.playerTitle.textContent = track.title;
+  setPlayerTitle(track.title);
   els.playerArtist.textContent = track.artist || '';
 }
 
@@ -507,10 +528,13 @@ function initYtPlayer() {
 function onPlayerStateChange(e) {
   if (e.data === YT.PlayerState.PLAYING) {
     els.playBtn.innerHTML = pauseIcon();
+    setPlayingIndicator(true);
   } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.CUED) {
     els.playBtn.innerHTML = playIcon();
+    setPlayingIndicator(false);
   } else if (e.data === YT.PlayerState.ENDED) {
     els.playBtn.innerHTML = playIcon();
+    setPlayingIndicator(false);
     playTrackAt(currentTrackIndex + 1);
   }
 }

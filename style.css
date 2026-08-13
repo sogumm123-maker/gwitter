@@ -244,6 +244,28 @@ body {
   text-overflow: ellipsis;
 }
 
+.player-title-inner {
+  display: inline-flex;
+}
+
+.player-title-text {
+  display: inline-flex;
+  align-items: center;
+}
+
+.player-title-gap {
+  display: inline-block;
+  width: 32px;
+}
+
+.player-title-inner.is-overflowing.is-playing {
+  animation: player-title-scroll 8s linear infinite;
+}
+
+@keyframes player-title-scroll {
+  to { transform: translateX(-50%); }
+}
+
 .player-artist {
   margin: 1px 0 0;
   font-size: 12px;
@@ -584,6 +606,8 @@ body {
   height: 36px;
   border-radius: 50%;
   background: var(--bg-sunken);
+  background-size: cover;
+  background-position: center;
   border: 1px solid var(--border);
   display: flex;
   align-items: center;
