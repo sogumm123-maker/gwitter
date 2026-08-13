@@ -547,6 +547,15 @@ function ensureYouTubeApi() {
   window.onYouTubeIframeAPIReady = initYtPlayer;
 }
 
+let isPlayerPlaying = false;
+let pendingPauseAfterLoad = false;
+
+function setPlayerPlaying(playing) {
+  isPlayerPlaying = playing;
+  els.playBtn.innerHTML = playing ? pauseIcon() : playIcon();
+  setPlayingIndicator(playing);
+}
+
 function initYtPlayer() {
   ytPlayer = new YT.Player('ytPlayer', {
     height: '0',
@@ -558,7 +567,15 @@ function initYtPlayer() {
         if (pendingAutoplayTrackIndex !== null) {
           const idx = pendingAutoplayTrackIndex;
           pendingAutoplayTrackIndex = null;
-          playTrackAt(idx);
+          const track = playlistTracks[idx];
+          if (track) {
+            currentTrackIndex = idx;
+            ytPlayer.loadVideoById(track.youtube_id);
+            if (pendingPauseAfterLoad) {
+              pendingPauseAfterLoad = false;
+              setTimeout(() => { if (ytPlayer) ytPlayer.pauseVideo(); }, 300);
+            }
+          }
         }
       },
       onStateChange: onPlayerStateChange,
@@ -568,14 +585,11 @@ function initYtPlayer() {
 
 function onPlayerStateChange(e) {
   if (e.data === YT.PlayerState.PLAYING) {
-    els.playBtn.innerHTML = pauseIcon();
-    setPlayingIndicator(true);
+    setPlayerPlaying(true);
   } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.CUED) {
-    els.playBtn.innerHTML = playIcon();
-    setPlayingIndicator(false);
+    setPlayerPlaying(false);
   } else if (e.data === YT.PlayerState.ENDED) {
-    els.playBtn.innerHTML = playIcon();
-    setPlayingIndicator(false);
+    setPlayerPlaying(false);
     playTrackAt(currentTrackIndex + 1);
   }
 }
@@ -587,6 +601,8 @@ function playTrackAt(index) {
   const track = playlistTracks[wrapped];
   updatePlayerMeta(track);
   renderPlaylist(playlistTracks);
+  setPlayerPlaying(true);
+  pendingPauseAfterLoad = false;
 
   if (!ytApiReady || !ytPlayer) {
     pendingAutoplayTrackIndex = wrapped;
@@ -603,11 +619,17 @@ els.playBtn.addEventListener('click', () => {
     return;
   }
   if (!ytApiReady || !ytPlayer) {
-    ensureYouTubeApi();
+    if (isPlayerPlaying) {
+      pendingPauseAfterLoad = true;
+      setPlayerPlaying(false);
+    } else {
+      pendingPauseAfterLoad = false;
+      setPlayerPlaying(true);
+      ensureYouTubeApi();
+    }
     return;
   }
-  const state = ytPlayer.getPlayerState();
-  if (state === YT.PlayerState.PLAYING) {
+  if (isPlayerPlaying) {
     ytPlayer.pauseVideo();
   } else {
     ytPlayer.playVideo();
