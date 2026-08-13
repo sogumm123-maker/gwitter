@@ -84,6 +84,11 @@ function markReacted(id, kind) {
   set.add(`${id}:${kind}`);
   localStorage.setItem(REACTED_KEY, JSON.stringify([...set]));
 }
+function unmarkReacted(id, kind) {
+  const set = getReactedSet();
+  set.delete(`${id}:${kind}`);
+  localStorage.setItem(REACTED_KEY, JSON.stringify([...set]));
+}
 
 function getVisitorId() {
   let id = localStorage.getItem('guestbook_visitor_id');
@@ -958,7 +963,8 @@ els.entries.addEventListener('click', async (e) => {
   if (reactBtn) {
     const id = Number(reactBtn.dataset.id);
     const kind = reactBtn.dataset.kind;
-    if (reactBtn.disabled || hasReacted(id, kind)) return;
+    if (reactBtn.disabled) return;
+    const already = hasReacted(id, kind);
     reactBtn.disabled = true;
 
     if (DEMO_MODE) {
@@ -966,10 +972,24 @@ els.entries.addEventListener('click', async (e) => {
       const target = rows.find((row) => row.id === id);
       if (target) {
         const field = kind === 'like' ? 'like_count' : 'quote_count';
-        target[field] = (target[field] || 0) + 1;
+        target[field] = Math.max((target[field] || 0) + (already ? -1 : 1), 0);
         demoSaveEntries(rows);
       }
-      markReacted(id, kind);
+      if (already) unmarkReacted(id, kind); else markReacted(id, kind);
+      await loadEntries();
+      return;
+    }
+
+    if (already) {
+      const { error } = await client.from('guestbook_reactions')
+        .delete()
+        .eq('entry_id', id).eq('kind', kind).eq('visitor_id', getVisitorId());
+      if (error) {
+        console.error(error);
+        reactBtn.disabled = false;
+        return;
+      }
+      unmarkReacted(id, kind);
       await loadEntries();
       return;
     }
@@ -1156,7 +1176,8 @@ els.posts.addEventListener('click', async (e) => {
     const id = Number(reactBtn.dataset.id);
     const kind = reactBtn.dataset.kind;
     const key = `p${id}`;
-    if (reactBtn.disabled || hasReacted(key, kind)) return;
+    if (reactBtn.disabled) return;
+    const already = hasReacted(key, kind);
     reactBtn.disabled = true;
 
     if (DEMO_MODE) {
@@ -1164,10 +1185,24 @@ els.posts.addEventListener('click', async (e) => {
       const target = rows.find((row) => row.id === id);
       if (target) {
         const field = kind === 'like' ? 'like_count' : 'quote_count';
-        target[field] = (target[field] || 0) + 1;
+        target[field] = Math.max((target[field] || 0) + (already ? -1 : 1), 0);
         demoSavePosts(rows);
       }
-      markReacted(key, kind);
+      if (already) unmarkReacted(key, kind); else markReacted(key, kind);
+      await loadPosts();
+      return;
+    }
+
+    if (already) {
+      const { error } = await client.from('post_reactions')
+        .delete()
+        .eq('entry_id', id).eq('kind', kind).eq('visitor_id', getVisitorId());
+      if (error) {
+        console.error(error);
+        reactBtn.disabled = false;
+        return;
+      }
+      unmarkReacted(key, kind);
       await loadPosts();
       return;
     }
