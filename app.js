@@ -171,6 +171,10 @@ const els = {
   fCoverRemoveBtn: document.getElementById('fCoverRemoveBtn'),
   fCoverInput: document.getElementById('fCoverInput'),
   fPasscode: document.getElementById('fPasscode'),
+
+  lightbox: document.getElementById('lightbox'),
+  lightboxImg: document.getElementById('lightboxImg'),
+  lightboxClose: document.getElementById('lightboxClose'),
 };
 
 let currentProfile = null;
@@ -236,6 +240,22 @@ function quoteIcon() {
 function heartIcon() {
   return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
 }
+
+function openLightbox(src) {
+  els.lightboxImg.src = src;
+  els.lightbox.hidden = false;
+}
+function closeLightbox() {
+  els.lightbox.hidden = true;
+  els.lightboxImg.src = '';
+}
+els.lightboxClose.addEventListener('click', closeLightbox);
+els.lightbox.addEventListener('click', (e) => {
+  if (e.target === els.lightbox) closeLightbox();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !els.lightbox.hidden) closeLightbox();
+});
 
 function renderProfile(profile) {
   currentProfile = profile;
@@ -331,6 +351,15 @@ function renderPosts(rows) {
         </div>
         <p class="entry-msg">${escapeHtml(row.message)}</p>
         ${renderPostImages(row)}
+        <div class="entry-actions">
+          <span class="reaction-static" aria-hidden="true">${commentIcon()}</span>
+          <button class="reaction-btn ${hasReacted(`p${row.id}`, 'quote') ? 'is-active' : ''}" type="button" data-kind="quote" data-id="${row.id}" title="인용">
+            ${quoteIcon()}<span>${row.quote_count || 0}</span>
+          </button>
+          <button class="reaction-btn ${hasReacted(`p${row.id}`, 'like') ? 'is-active' : ''}" type="button" data-kind="like" data-id="${row.id}" title="마음">
+            ${heartIcon()}<span>${row.like_count || 0}</span>
+          </button>
+        </div>
       </div>
     </li>
   `).join('');
@@ -383,7 +412,7 @@ async function loadPosts() {
   }
   const { data, error } = await client
     .from('posts')
-    .select('id, message, image_url, image_urls, created_at')
+    .select('id, message, image_url, image_urls, like_count, quote_count, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) {
@@ -853,6 +882,12 @@ els.guestForm.addEventListener('submit', async (e) => {
 });
 
 els.entries.addEventListener('click', async (e) => {
+  const img = e.target.closest('.entry-image');
+  if (img) {
+    openLightbox(img.src);
+    return;
+  }
+
   const delBtn = e.target.closest('.entry-del');
   const editBtn = e.target.closest('.entry-edit');
 
@@ -1085,28 +1120,72 @@ els.postForm.addEventListener('submit', async (e) => {
 });
 
 els.posts.addEventListener('click', async (e) => {
-  const delBtn = e.target.closest('.post-del');
-  if (!delBtn) return;
-  const id = Number(delBtn.dataset.id);
-  const passcode = window.prompt('삭제하려면 관리자 비밀번호를 입력하세요.');
-  if (!passcode) return;
+  const img = e.target.closest('.post-images img, .entry-image');
+  if (img) {
+    openLightbox(img.src);
+    return;
+  }
 
-  if (DEMO_MODE) {
-    if (passcode !== DEMO_PASSCODE) {
-      alert('비밀번호가 올바르지 않아요.');
+  const delBtn = e.target.closest('.post-del');
+  if (delBtn) {
+    const id = Number(delBtn.dataset.id);
+    const passcode = window.prompt('삭제하려면 관리자 비밀번호를 입력하세요.');
+    if (!passcode) return;
+
+    if (DEMO_MODE) {
+      if (passcode !== DEMO_PASSCODE) {
+        alert('비밀번호가 올바르지 않아요.');
+        return;
+      }
+      demoSavePosts(demoLoadPosts().filter((row) => row.id !== id));
+      await loadPosts();
       return;
     }
-    demoSavePosts(demoLoadPosts().filter((row) => row.id !== id));
+
+    const { data, error } = await client.rpc('delete_post', { p_id: id, p_passcode: passcode });
+    if (error || !data) {
+      alert('삭제하지 못했어요. 비밀번호를 확인해주세요.');
+      return;
+    }
     await loadPosts();
     return;
   }
 
-  const { data, error } = await client.rpc('delete_post', { p_id: id, p_passcode: passcode });
-  if (error || !data) {
-    alert('삭제하지 못했어요. 비밀번호를 확인해주세요.');
-    return;
+  const reactBtn = e.target.closest('.reaction-btn');
+  if (reactBtn) {
+    const id = Number(reactBtn.dataset.id);
+    const kind = reactBtn.dataset.kind;
+    const key = `p${id}`;
+    if (reactBtn.disabled || hasReacted(key, kind)) return;
+    reactBtn.disabled = true;
+
+    if (DEMO_MODE) {
+      const rows = demoLoadPosts();
+      const target = rows.find((row) => row.id === id);
+      if (target) {
+        const field = kind === 'like' ? 'like_count' : 'quote_count';
+        target[field] = (target[field] || 0) + 1;
+        demoSavePosts(rows);
+      }
+      markReacted(key, kind);
+      await loadPosts();
+      return;
+    }
+
+    const { error } = await client.from('post_reactions').insert({
+      entry_id: id,
+      kind,
+      visitor_id: getVisitorId(),
+    });
+
+    if (error && error.code !== '23505') {
+      console.error(error);
+      reactBtn.disabled = false;
+      return;
+    }
+    markReacted(key, kind);
+    await loadPosts();
   }
-  await loadPosts();
 });
 
 /* ---- profile edit ---- */

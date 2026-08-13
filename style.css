@@ -560,7 +560,8 @@ body {
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--border);
-  aspect-ratio: 16 / 9;
+  height: 220px;
+  cursor: pointer;
 }
 
 .post-images img {
@@ -582,6 +583,43 @@ body {
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
 }
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.lightbox[hidden] { display: none; }
+
+.lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.28); }
 
 .compose-footer {
   display: flex;

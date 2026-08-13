@@ -482,4 +482,52 @@ $$;
 grant execute on function create_post(text, text[], text) to anon;
 ```
 
-이제 게시물 작성 창에서 사진을 최대 4장까지 첨부할 수 있고, 게시물 목록에서 트위터처럼 장 수에 맞는 그리드로 보여요 (1장은 그대로, 2~4장은 격자).
+이제 게시물 작성 창에서 사진을 최대 4장까지 첨부할 수 있고, 게시물 목록에서 트위터처럼 장 수에 맞는 그리드로 보여요 (1장은 그대로, 2~4장은 격자). 사진을 클릭하면 크게 볼 수도 있어요.
+
+## 9. (추가 기능) 게시물에도 인용·마음 반응 버튼
+
+방명록과 똑같은 방식으로, 게시물에도 인용(♻)·마음(♥) 버튼이 생겨요. 한 사람당 게시물 하나에 한 번씩만 누를 수 있어요. 새 쿼리 창에 아래 SQL을 실행해주세요.
+
+```sql
+alter table posts
+  add column if not exists like_count int not null default 0,
+  add column if not exists quote_count int not null default 0;
+
+create table if not exists post_reactions (
+  id bigint generated always as identity primary key,
+  entry_id bigint not null references posts(id) on delete cascade,
+  kind text not null check (kind in ('like', 'quote')),
+  visitor_id text not null,
+  created_at timestamptz not null default now(),
+  unique (entry_id, kind, visitor_id)
+);
+
+alter table post_reactions enable row level security;
+
+create policy "post reactions are publicly readable" on post_reactions
+  for select using (true);
+
+create policy "anyone can react to a post once" on post_reactions
+  for insert with check (
+    kind in ('like', 'quote')
+    and char_length(visitor_id) between 8 and 100
+  );
+
+create or replace function bump_post_reaction_count()
+returns trigger
+language plpgsql as $$
+begin
+  if new.kind = 'like' then
+    update posts set like_count = like_count + 1 where id = new.entry_id;
+  elsif new.kind = 'quote' then
+    update posts set quote_count = quote_count + 1 where id = new.entry_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_bump_post_reaction_count on post_reactions;
+create trigger trg_bump_post_reaction_count
+after insert on post_reactions
+for each row execute function bump_post_reaction_count();
+```
