@@ -746,3 +746,101 @@ end;
 $$;
 grant execute on function create_post(text, text[], text, text, text, text) to anon;
 ```
+
+## 13. (추가 기능) 게시물 댓글(멘션)
+
+방명록 댓글과 똑같은 방식으로, 게시물에도 댓글을 달 수 있어요. 관리자는 비밀번호만 입력하면 내 프로필로, 방문자는 닉네임으로 댓글을 달아요.
+
+```sql
+alter table posts add column if not exists comment_count int not null default 0;
+
+create table if not exists post_comments (
+  id bigint generated always as identity primary key,
+  entry_id bigint not null references posts(id) on delete cascade,
+  author_name text,
+  message text not null,
+  is_admin boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table post_comments enable row level security;
+
+create policy "post comments are publicly readable" on post_comments
+  for select using (true);
+
+create or replace function create_post_comment(
+  p_entry_id bigint, p_message text, p_author_name text, p_passcode text
+) returns bigint
+language plpgsql
+security definer
+as $$
+declare
+  new_id bigint;
+  admin_ok boolean;
+  is_admin_comment boolean := false;
+begin
+  if char_length(p_message) < 1 or char_length(p_message) > 280 then
+    raise exception 'invalid message';
+  end if;
+
+  if p_passcode is not null and char_length(p_passcode) > 0 then
+    select (passcode_hash = crypt(p_passcode, passcode_hash)) into admin_ok
+    from profile where id = 1;
+    if not coalesce(admin_ok, false) then
+      raise exception 'invalid passcode';
+    end if;
+    is_admin_comment := true;
+  else
+    if p_author_name is null or char_length(trim(p_author_name)) < 1 or char_length(p_author_name) > 40 then
+      raise exception 'invalid name';
+    end if;
+  end if;
+
+  insert into post_comments (entry_id, author_name, message, is_admin)
+  values (p_entry_id, case when is_admin_comment then null else trim(p_author_name) end, p_message, is_admin_comment)
+  returning id into new_id;
+
+  return new_id;
+end;
+$$;
+grant execute on function create_post_comment to anon;
+
+create or replace function delete_post_comment(p_id bigint, p_passcode text)
+returns boolean
+language plpgsql
+security definer
+as $$
+declare ok boolean;
+begin
+  select (passcode_hash = crypt(p_passcode, passcode_hash)) into ok
+  from profile where id = 1;
+  if not coalesce(ok, false) then
+    return false;
+  end if;
+  delete from post_comments where id = p_id;
+  return true;
+end;
+$$;
+grant execute on function delete_post_comment to anon;
+
+create or replace function bump_post_comment_count()
+returns trigger
+language plpgsql
+security definer
+as $$
+begin
+  if tg_op = 'INSERT' then
+    update posts set comment_count = comment_count + 1 where id = new.entry_id;
+    return new;
+  elsif tg_op = 'DELETE' then
+    update posts set comment_count = greatest(comment_count - 1, 0) where id = old.entry_id;
+    return old;
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_bump_post_comment_count on post_comments;
+create trigger trg_bump_post_comment_count
+after insert or delete on post_comments
+for each row execute function bump_post_comment_count();
+```

@@ -6,6 +6,7 @@ const DEMO_ENTRIES_KEY = 'guestbook_demo_entries';
 const DEMO_POSTS_KEY = 'guestbook_demo_posts';
 const DEMO_PLAYLIST_KEY = 'guestbook_demo_playlist';
 const DEMO_COMMENTS_KEY = 'guestbook_demo_comments';
+const DEMO_POST_COMMENTS_KEY = 'guestbook_demo_post_comments';
 const DEMO_PASSCODE = '1234';
 const ADMIN_KEY = 'guestbook_is_admin';
 
@@ -67,6 +68,14 @@ function demoLoadComments() {
 }
 function demoSaveComments(rows) {
   localStorage.setItem(DEMO_COMMENTS_KEY, JSON.stringify(rows));
+}
+
+function demoLoadPostComments() {
+  const stored = localStorage.getItem(DEMO_POST_COMMENTS_KEY);
+  return stored ? JSON.parse(stored) : [];
+}
+function demoSavePostComments(rows) {
+  localStorage.setItem(DEMO_POST_COMMENTS_KEY, JSON.stringify(rows));
 }
 
 function isAdmin() {
@@ -197,8 +206,9 @@ const els = {
 let currentProfile = null;
 let lastPostsData = [];
 let lastEntriesData = [];
-let openCommentEntryId = null;
+let openCommentKey = null;
 const commentsCache = new Map();
+function commentKey(kind, id) { return `${kind}:${id}`; }
 let playlistTracks = [];
 let currentTrackIndex = -1;
 let ytPlayer = null;
@@ -331,9 +341,10 @@ function commentItemHtml(c) {
   `;
 }
 
-function commentPanelHtml(entryId) {
-  const isOpen = entryId === openCommentEntryId;
-  const cached = commentsCache.get(entryId);
+function commentPanelHtml(kind, entryId) {
+  const key = commentKey(kind, entryId);
+  const isOpen = key === openCommentKey;
+  const cached = commentsCache.get(key);
   const listHtml = !cached
     ? ''
     : cached.length
@@ -341,9 +352,9 @@ function commentPanelHtml(entryId) {
       : '<li class="comment-empty">아직 댓글이 없어요.</li>';
 
   return `
-    <div class="comment-panel ${isOpen ? 'is-open' : ''}" data-entry-id="${entryId}">
+    <div class="comment-panel ${isOpen ? 'is-open' : ''}" data-entity="${kind}" data-entry-id="${entryId}">
       <ul class="comment-list">${listHtml}</ul>
-      <form class="comment-compose" data-entry-id="${entryId}">
+      <form class="comment-compose" data-entity="${kind}" data-entry-id="${entryId}">
         ${!isAdmin() ? '<input class="comment-name-input" maxlength="20" placeholder="닉네임" required />' : ''}
         <div class="comment-compose-row">
           ${isAdmin() ? '<span class="comment-admin-tag">gg로 댓글</span>' : ''}
@@ -376,7 +387,7 @@ function renderEntries(rows) {
         <p class="entry-msg">${escapeHtml(row.message)}</p>
         ${row.image_url ? `<img class="entry-image" src="${row.image_url}" alt="${escapeHtml(row.name)}님이 첨부한 이미지" loading="lazy" />` : ''}
         <div class="entry-actions">
-          <button class="reaction-btn comment-toggle-btn ${row.id === openCommentEntryId ? 'is-active' : ''}" type="button" data-id="${row.id}" title="댓글">
+          <button class="reaction-btn comment-toggle-btn ${commentKey('guestbook', row.id) === openCommentKey ? 'is-active' : ''}" type="button" data-entity="guestbook" data-id="${row.id}" title="댓글">
             ${commentIcon()}<span>${row.comment_count || 0}</span>
           </button>
           <button class="reaction-btn ${hasReacted(row.id, 'quote') ? 'is-active' : ''}" type="button" data-kind="quote" data-id="${row.id}" title="인용">
@@ -386,7 +397,7 @@ function renderEntries(rows) {
             ${heartIcon()}<span>${row.like_count || 0}</span>
           </button>
         </div>
-        ${commentPanelHtml(row.id)}
+        ${commentPanelHtml('guestbook', row.id)}
       </div>
     </li>
   `).join('');
@@ -436,7 +447,9 @@ function renderPosts(rows) {
         ${renderPostImages(row)}
         ${renderPostYoutubeCard(row)}
         <div class="entry-actions">
-          <span class="reaction-static" aria-hidden="true">${commentIcon()}</span>
+          <button class="reaction-btn comment-toggle-btn ${commentKey('post', row.id) === openCommentKey ? 'is-active' : ''}" type="button" data-entity="post" data-id="${row.id}" title="댓글">
+            ${commentIcon()}<span>${row.comment_count || 0}</span>
+          </button>
           <button class="reaction-btn ${hasReacted(`p${row.id}`, 'quote') ? 'is-active' : ''}" type="button" data-kind="quote" data-id="${row.id}" title="인용">
             ${quoteIcon()}<span>${row.quote_count || 0}</span>
           </button>
@@ -444,6 +457,7 @@ function renderPosts(rows) {
             ${heartIcon()}<span>${row.like_count || 0}</span>
           </button>
         </div>
+        ${commentPanelHtml('post', row.id)}
       </div>
     </li>
   `).join('');
@@ -496,7 +510,7 @@ async function loadPosts() {
   }
   const { data, error } = await client
     .from('posts')
-    .select('id, message, image_url, image_urls, like_count, quote_count, youtube_id, youtube_title, youtube_thumbnail, created_at')
+    .select('id, message, image_url, image_urls, like_count, quote_count, comment_count, youtube_id, youtube_title, youtube_thumbnail, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) {
@@ -563,12 +577,24 @@ async function loadPlaylist() {
 let hasInteracted = false;
 let playlistReadyForAutoplay = false;
 
+let playHistory = [];
+
+function pickRandomTrackIndex(excludeIndex) {
+  if (!playlistTracks.length) return 0;
+  if (playlistTracks.length === 1) return 0;
+  let idx;
+  do {
+    idx = Math.floor(Math.random() * playlistTracks.length);
+  } while (idx === excludeIndex);
+  return idx;
+}
+
 function maybeAutoplay() {
   if (!hasInteracted || !playlistReadyForAutoplay) return;
   if (currentTrackIndex !== -1) return;
   if (!playlistTracks.length) return;
   ensureYouTubeApi();
-  playTrackAt(0);
+  playTrackAt(pickRandomTrackIndex(-1));
 }
 
 function armAutoplay() {
@@ -669,13 +695,16 @@ function onPlayerStateChange(e) {
     setPlayerPlaying(false);
   } else if (e.data === YT.PlayerState.ENDED) {
     setPlayerPlaying(false);
-    playTrackAt(currentTrackIndex + 1);
+    playTrackAt(pickRandomTrackIndex(currentTrackIndex));
   }
 }
 
-function playTrackAt(index) {
+function playTrackAt(index, opts = {}) {
   if (!playlistTracks.length) return;
   const wrapped = ((index % playlistTracks.length) + playlistTracks.length) % playlistTracks.length;
+  if (!opts.fromHistory && currentTrackIndex !== -1 && currentTrackIndex !== wrapped) {
+    playHistory.push(currentTrackIndex);
+  }
   currentTrackIndex = wrapped;
   const track = playlistTracks[wrapped];
   updatePlayerMeta(track);
@@ -694,7 +723,7 @@ function playTrackAt(index) {
 els.playBtn.addEventListener('click', () => {
   if (!playlistTracks.length) return;
   if (currentTrackIndex === -1) {
-    playTrackAt(0);
+    playTrackAt(pickRandomTrackIndex(-1));
     return;
   }
   if (!ytApiReady || !ytPlayer) {
@@ -717,12 +746,16 @@ els.playBtn.addEventListener('click', () => {
 
 els.prevBtn.addEventListener('click', () => {
   if (!playlistTracks.length) return;
-  playTrackAt(currentTrackIndex === -1 ? playlistTracks.length - 1 : currentTrackIndex - 1);
+  if (playHistory.length) {
+    playTrackAt(playHistory.pop(), { fromHistory: true });
+  } else {
+    playTrackAt(pickRandomTrackIndex(currentTrackIndex));
+  }
 });
 
 els.nextBtn.addEventListener('click', () => {
   if (!playlistTracks.length) return;
-  playTrackAt(currentTrackIndex === -1 ? 0 : currentTrackIndex + 1);
+  playTrackAt(pickRandomTrackIndex(currentTrackIndex));
 });
 
 els.playerMoreBtn.addEventListener('click', () => {
@@ -1001,11 +1034,88 @@ els.guestForm.addEventListener('submit', async (e) => {
   await loadEntries();
 });
 
-els.entries.addEventListener('submit', async (e) => {
-  const form = e.target.closest('.comment-compose');
-  if (!form) return;
-  e.preventDefault();
+function commentDemoStore(kind) {
+  return kind === 'post'
+    ? { load: demoLoadPostComments, save: demoSavePostComments }
+    : { load: demoLoadComments, save: demoSaveComments };
+}
+function commentTable(kind) { return kind === 'post' ? 'post_comments' : 'guestbook_comments'; }
+function createCommentRpc(kind) { return kind === 'post' ? 'create_post_comment' : 'create_guestbook_comment'; }
+function deleteCommentRpc(kind) { return kind === 'post' ? 'delete_post_comment' : 'delete_guestbook_comment'; }
+function parentDemoStore(kind) {
+  return kind === 'post'
+    ? { load: demoLoadPosts, save: demoSavePosts }
+    : { load: demoLoadEntries, save: demoSaveEntries };
+}
+function reloadParentList(kind) { return kind === 'post' ? loadPosts() : loadEntries(); }
+function rerenderParentList(kind) { return kind === 'post' ? renderPosts(lastPostsData) : renderEntries(lastEntriesData); }
 
+async function ensureCommentsLoaded(kind, entryId) {
+  const key = commentKey(kind, entryId);
+  if (commentsCache.has(key)) return;
+  if (DEMO_MODE) {
+    const store = commentDemoStore(kind);
+    commentsCache.set(key, store.load().filter((c) => c.entry_id === entryId));
+    return;
+  }
+  const { data, error } = await client
+    .from(commentTable(kind))
+    .select('id, author_name, message, is_admin, created_at')
+    .eq('entry_id', entryId)
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('댓글 로드 실패', error);
+    commentsCache.set(key, []);
+    return;
+  }
+  commentsCache.set(key, data);
+}
+
+async function handleCommentToggle(kind, id) {
+  const key = commentKey(kind, id);
+  if (openCommentKey === key) {
+    openCommentKey = null;
+  } else {
+    openCommentKey = key;
+    await ensureCommentsLoaded(kind, id);
+  }
+  rerenderParentList(kind);
+}
+
+async function handleCommentDelete(kind, entryId, commentId) {
+  const passcode = window.prompt('삭제하려면 관리자 비밀번호를 입력하세요.');
+  if (!passcode) return;
+  const key = commentKey(kind, entryId);
+
+  if (DEMO_MODE) {
+    if (passcode !== DEMO_PASSCODE) {
+      alert('비밀번호가 올바르지 않아요.');
+      return;
+    }
+    const cStore = commentDemoStore(kind);
+    cStore.save(cStore.load().filter((c) => c.id !== commentId));
+    commentsCache.delete(key);
+    await ensureCommentsLoaded(kind, entryId);
+    const pStore = parentDemoStore(kind);
+    const rows = pStore.load();
+    const target = rows.find((r) => r.id === entryId);
+    if (target) { target.comment_count = Math.max((target.comment_count || 0) - 1, 0); pStore.save(rows); }
+    await reloadParentList(kind);
+    return;
+  }
+
+  const { data, error } = await client.rpc(deleteCommentRpc(kind), { p_id: commentId, p_passcode: passcode });
+  if (error || !data) {
+    alert('삭제하지 못했어요. 비밀번호를 확인해주세요.');
+    return;
+  }
+  commentsCache.delete(key);
+  await ensureCommentsLoaded(kind, entryId);
+  await reloadParentList(kind);
+}
+
+async function handleCommentSubmit(form) {
+  const kind = form.dataset.entity;
   const entryId = Number(form.dataset.entryId);
   const nameInput = form.querySelector('.comment-name-input');
   const messageInput = form.querySelector('.comment-message-input');
@@ -1027,12 +1137,15 @@ els.entries.addEventListener('submit', async (e) => {
     }
   }
 
+  const key = commentKey(kind, entryId);
+
   if (DEMO_MODE) {
     if (admin && passcode !== DEMO_PASSCODE) {
       alert('비밀번호가 올바르지 않아요.');
       return;
     }
-    const comments = demoLoadComments();
+    const cStore = commentDemoStore(kind);
+    const comments = cStore.load();
     comments.push({
       id: Date.now(),
       entry_id: entryId,
@@ -1041,17 +1154,18 @@ els.entries.addEventListener('submit', async (e) => {
       message,
       created_at: new Date().toISOString(),
     });
-    demoSaveComments(comments);
-    commentsCache.delete(entryId);
-    await ensureCommentsLoaded(entryId);
-    const rows = demoLoadEntries();
+    cStore.save(comments);
+    commentsCache.delete(key);
+    await ensureCommentsLoaded(kind, entryId);
+    const pStore = parentDemoStore(kind);
+    const rows = pStore.load();
     const target = rows.find((r) => r.id === entryId);
-    if (target) { target.comment_count = (target.comment_count || 0) + 1; demoSaveEntries(rows); }
-    await loadEntries();
+    if (target) { target.comment_count = (target.comment_count || 0) + 1; pStore.save(rows); }
+    await reloadParentList(kind);
     return;
   }
 
-  const { error } = await client.rpc('create_guestbook_comment', {
+  const { error } = await client.rpc(createCommentRpc(kind), {
     p_entry_id: entryId,
     p_message: message,
     p_author_name: admin ? null : authorName,
@@ -1062,30 +1176,24 @@ els.entries.addEventListener('submit', async (e) => {
     alert('댓글을 남기지 못했어요. 비밀번호를 확인해주세요.');
     return;
   }
-  commentsCache.delete(entryId);
-  await ensureCommentsLoaded(entryId);
-  await loadEntries();
+  commentsCache.delete(key);
+  await ensureCommentsLoaded(kind, entryId);
+  await reloadParentList(kind);
+}
+
+els.entries.addEventListener('submit', async (e) => {
+  const form = e.target.closest('.comment-compose');
+  if (!form) return;
+  e.preventDefault();
+  await handleCommentSubmit(form);
 });
 
-async function ensureCommentsLoaded(entryId) {
-  if (commentsCache.has(entryId)) return;
-  if (DEMO_MODE) {
-    const rows = demoLoadComments().filter((c) => c.entry_id === entryId);
-    commentsCache.set(entryId, rows);
-    return;
-  }
-  const { data, error } = await client
-    .from('guestbook_comments')
-    .select('id, author_name, message, is_admin, created_at')
-    .eq('entry_id', entryId)
-    .order('created_at', { ascending: true });
-  if (error) {
-    console.error('댓글 로드 실패', error);
-    commentsCache.set(entryId, []);
-    return;
-  }
-  commentsCache.set(entryId, data);
-}
+els.posts.addEventListener('submit', async (e) => {
+  const form = e.target.closest('.comment-compose');
+  if (!form) return;
+  e.preventDefault();
+  await handleCommentSubmit(form);
+});
 
 els.entries.addEventListener('click', async (e) => {
   const img = e.target.closest('.entry-image');
@@ -1096,47 +1204,14 @@ els.entries.addEventListener('click', async (e) => {
 
   const commentToggleBtn = e.target.closest('.comment-toggle-btn');
   if (commentToggleBtn) {
-    const id = Number(commentToggleBtn.dataset.id);
-    if (openCommentEntryId === id) {
-      openCommentEntryId = null;
-    } else {
-      openCommentEntryId = id;
-      await ensureCommentsLoaded(id);
-    }
-    renderEntries(lastEntriesData);
+    await handleCommentToggle(commentToggleBtn.dataset.entity, Number(commentToggleBtn.dataset.id));
     return;
   }
 
   const commentDelBtn = e.target.closest('.comment-del');
   if (commentDelBtn) {
-    const commentId = Number(commentDelBtn.dataset.id);
-    const entryId = Number(e.target.closest('.entry').dataset.id);
-    const passcode = window.prompt('삭제하려면 관리자 비밀번호를 입력하세요.');
-    if (!passcode) return;
-
-    if (DEMO_MODE) {
-      if (passcode !== DEMO_PASSCODE) {
-        alert('비밀번호가 올바르지 않아요.');
-        return;
-      }
-      demoSaveComments(demoLoadComments().filter((c) => c.id !== commentId));
-      commentsCache.delete(entryId);
-      await ensureCommentsLoaded(entryId);
-      const rows = demoLoadEntries();
-      const target = rows.find((r) => r.id === entryId);
-      if (target) { target.comment_count = Math.max((target.comment_count || 0) - 1, 0); demoSaveEntries(rows); }
-      await loadEntries();
-      return;
-    }
-
-    const { data, error } = await client.rpc('delete_guestbook_comment', { p_id: commentId, p_passcode: passcode });
-    if (error || !data) {
-      alert('삭제하지 못했어요. 비밀번호를 확인해주세요.');
-      return;
-    }
-    commentsCache.delete(entryId);
-    await ensureCommentsLoaded(entryId);
-    await loadEntries();
+    const panel = e.target.closest('.comment-panel');
+    await handleCommentDelete(panel.dataset.entity, Number(panel.dataset.entryId), Number(commentDelBtn.dataset.id));
     return;
   }
 
@@ -1448,6 +1523,19 @@ els.posts.addEventListener('click', async (e) => {
   const img = e.target.closest('.post-images img, .entry-image');
   if (img) {
     openLightbox(img.src);
+    return;
+  }
+
+  const commentToggleBtn = e.target.closest('.comment-toggle-btn');
+  if (commentToggleBtn) {
+    await handleCommentToggle(commentToggleBtn.dataset.entity, Number(commentToggleBtn.dataset.id));
+    return;
+  }
+
+  const commentDelBtn = e.target.closest('.comment-del');
+  if (commentDelBtn) {
+    const panel = e.target.closest('.comment-panel');
+    await handleCommentDelete(panel.dataset.entity, Number(panel.dataset.entryId), Number(commentDelBtn.dataset.id));
     return;
   }
 
