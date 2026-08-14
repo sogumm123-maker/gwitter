@@ -5,6 +5,7 @@ const DEMO_PROFILE_KEY = 'guestbook_demo_profile';
 const DEMO_ENTRIES_KEY = 'guestbook_demo_entries';
 const DEMO_POSTS_KEY = 'guestbook_demo_posts';
 const DEMO_PLAYLIST_KEY = 'guestbook_demo_playlist';
+const DEMO_COMMENTS_KEY = 'guestbook_demo_comments';
 const DEMO_PASSCODE = '1234';
 const ADMIN_KEY = 'guestbook_is_admin';
 
@@ -58,6 +59,14 @@ function demoLoadPlaylist() {
 }
 function demoSavePlaylist(rows) {
   localStorage.setItem(DEMO_PLAYLIST_KEY, JSON.stringify(rows));
+}
+
+function demoLoadComments() {
+  const stored = localStorage.getItem(DEMO_COMMENTS_KEY);
+  return stored ? JSON.parse(stored) : [];
+}
+function demoSaveComments(rows) {
+  localStorage.setItem(DEMO_COMMENTS_KEY, JSON.stringify(rows));
 }
 
 function isAdmin() {
@@ -135,6 +144,10 @@ const els = {
   postMediaBtn: document.getElementById('postMediaBtn'),
   postMediaInput: document.getElementById('postMediaInput'),
   postMediaPreview: document.getElementById('postMediaPreview'),
+  postYtPreview: document.getElementById('postYtPreview'),
+  postYtPreviewThumb: document.getElementById('postYtPreviewThumb'),
+  postYtPreviewTitle: document.getElementById('postYtPreviewTitle'),
+  postYtPreviewRemove: document.getElementById('postYtPreviewRemove'),
 
   entries: document.getElementById('entries'),
   guestForm: document.getElementById('guestForm'),
@@ -183,6 +196,9 @@ const els = {
 
 let currentProfile = null;
 let lastPostsData = [];
+let lastEntriesData = [];
+let openCommentEntryId = null;
+const commentsCache = new Map();
 let playlistTracks = [];
 let currentTrackIndex = -1;
 let ytPlayer = null;
@@ -244,6 +260,9 @@ function quoteIcon() {
 function heartIcon() {
   return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
 }
+function smallBadgeIcon() {
+  return '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 14.5 4.5 17.9 4.1 18.6 7.5 21.5 9.4 20.1 12.5 21.5 15.6 18.6 17.5 17.9 20.9 14.5 20.5 12 23 9.5 20.5 6.1 20.9 5.4 17.5 2.5 15.6 3.9 12.5 2.5 9.4 5.4 7.5 6.1 4.1 9.5 4.5Z"/><path d="M9 12.3l2 2 4-4.3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
 
 function openLightbox(src) {
   els.lightboxImg.src = src;
@@ -292,7 +311,52 @@ function renderProfile(profile) {
   els.meta.innerHTML = metaParts.join('');
 }
 
+function commentItemHtml(c) {
+  const displayName = c.is_admin ? (currentProfile?.name || 'gg') : c.author_name;
+  const avatarUrl = c.is_admin ? (currentProfile?.avatar_url || '') : '';
+  const avatarStyle = avatarUrl ? ` style="background-image:url('${avatarUrl}')"` : '';
+  return `
+    <li class="comment-item" data-id="${c.id}">
+      <div class="comment-avatar"${avatarStyle}>${avatarUrl ? '' : escapeHtml(initials(displayName))}</div>
+      <div class="comment-body">
+        <div class="comment-head">
+          <span class="comment-name">${escapeHtml(displayName)}</span>
+          ${c.is_admin ? `<span class="comment-badge">${smallBadgeIcon()}</span>` : ''}
+          <span class="comment-time">· ${relativeTime(c.created_at)}</span>
+          ${isAdmin() ? `<button class="comment-del" data-id="${c.id}" type="button" title="삭제">삭제</button>` : ''}
+        </div>
+        <p class="comment-msg">${escapeHtml(c.message)}</p>
+      </div>
+    </li>
+  `;
+}
+
+function commentPanelHtml(entryId) {
+  const isOpen = entryId === openCommentEntryId;
+  const cached = commentsCache.get(entryId);
+  const listHtml = !cached
+    ? ''
+    : cached.length
+      ? cached.map(commentItemHtml).join('')
+      : '<li class="comment-empty">아직 댓글이 없어요.</li>';
+
+  return `
+    <div class="comment-panel ${isOpen ? 'is-open' : ''}" data-entry-id="${entryId}">
+      <ul class="comment-list">${listHtml}</ul>
+      <form class="comment-compose" data-entry-id="${entryId}">
+        ${!isAdmin() ? '<input class="comment-name-input" maxlength="20" placeholder="닉네임" required />' : ''}
+        <div class="comment-compose-row">
+          ${isAdmin() ? '<span class="comment-admin-tag">gg로 댓글</span>' : ''}
+          <input class="comment-message-input" maxlength="280" placeholder="댓글을 입력하세요" required />
+          <button type="submit" class="comment-submit">게시</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
 function renderEntries(rows) {
+  lastEntriesData = rows;
   if (!rows.length) {
     els.entries.innerHTML = '<li class="empty-state">아직 방명록이 비어 있어요. 첫 글을 남겨보세요!</li>';
     return;
@@ -312,7 +376,9 @@ function renderEntries(rows) {
         <p class="entry-msg">${escapeHtml(row.message)}</p>
         ${row.image_url ? `<img class="entry-image" src="${row.image_url}" alt="${escapeHtml(row.name)}님이 첨부한 이미지" loading="lazy" />` : ''}
         <div class="entry-actions">
-          <span class="reaction-static" aria-hidden="true">${commentIcon()}</span>
+          <button class="reaction-btn comment-toggle-btn ${row.id === openCommentEntryId ? 'is-active' : ''}" type="button" data-id="${row.id}" title="댓글">
+            ${commentIcon()}<span>${row.comment_count || 0}</span>
+          </button>
           <button class="reaction-btn ${hasReacted(row.id, 'quote') ? 'is-active' : ''}" type="button" data-kind="quote" data-id="${row.id}" title="인용">
             ${quoteIcon()}<span>${row.quote_count || 0}</span>
           </button>
@@ -320,6 +386,7 @@ function renderEntries(rows) {
             ${heartIcon()}<span>${row.like_count || 0}</span>
           </button>
         </div>
+        ${commentPanelHtml(row.id)}
       </div>
     </li>
   `).join('');
@@ -332,6 +399,18 @@ function renderPostImages(row) {
     return `<img class="entry-image" src="${urls[0]}" alt="첨부 이미지" loading="lazy" />`;
   }
   return `<div class="post-images count-${urls.length}">${urls.map((u) => `<img src="${u}" alt="첨부 이미지" loading="lazy" />`).join('')}</div>`;
+}
+
+function renderPostYoutubeCard(row) {
+  if (!row.youtube_id) return '';
+  const thumbStyle = row.youtube_thumbnail ? ` style="background-image:url('${row.youtube_thumbnail}')"` : '';
+  return `
+    <a class="yt-card" href="https://www.youtube.com/watch?v=${row.youtube_id}" target="_blank" rel="noopener noreferrer">
+      <div class="yt-card-thumb"${thumbStyle}><span class="yt-card-play">▶</span></div>
+      <p class="yt-card-title">${escapeHtml(row.youtube_title || '유튜브 영상')}</p>
+      <p class="yt-card-source">youtube.com</p>
+    </a>
+  `;
 }
 
 function renderPosts(rows) {
@@ -355,6 +434,7 @@ function renderPosts(rows) {
         </div>
         <p class="entry-msg">${escapeHtml(row.message)}</p>
         ${renderPostImages(row)}
+        ${renderPostYoutubeCard(row)}
         <div class="entry-actions">
           <span class="reaction-static" aria-hidden="true">${commentIcon()}</span>
           <button class="reaction-btn ${hasReacted(`p${row.id}`, 'quote') ? 'is-active' : ''}" type="button" data-kind="quote" data-id="${row.id}" title="인용">
@@ -397,7 +477,7 @@ async function loadEntries() {
   }
   const { data, error } = await client
     .from('guestbook')
-    .select('id, name, message, image_url, like_count, quote_count, created_at')
+    .select('id, name, message, image_url, like_count, quote_count, comment_count, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) {
@@ -416,7 +496,7 @@ async function loadPosts() {
   }
   const { data, error } = await client
     .from('posts')
-    .select('id, message, image_url, image_urls, like_count, quote_count, created_at')
+    .select('id, message, image_url, image_urls, like_count, quote_count, youtube_id, youtube_title, youtube_thumbnail, created_at')
     .order('created_at', { ascending: false })
     .limit(200);
   if (error) {
@@ -754,6 +834,7 @@ function applyAdminVisibility() {
   els.postForm.hidden = !admin;
   renderPosts(lastPostsData);
   renderPlaylist(playlistTracks);
+  renderEntries(lastEntriesData);
 }
 
 async function promptAdminLogin() {
@@ -920,10 +1001,142 @@ els.guestForm.addEventListener('submit', async (e) => {
   await loadEntries();
 });
 
+els.entries.addEventListener('submit', async (e) => {
+  const form = e.target.closest('.comment-compose');
+  if (!form) return;
+  e.preventDefault();
+
+  const entryId = Number(form.dataset.entryId);
+  const nameInput = form.querySelector('.comment-name-input');
+  const messageInput = form.querySelector('.comment-message-input');
+  const message = messageInput.value.trim();
+  if (!message) return;
+
+  const admin = isAdmin();
+  let authorName = null;
+  let passcode = null;
+
+  if (admin) {
+    passcode = window.prompt('관리자 비밀번호를 입력하세요.');
+    if (!passcode) return;
+  } else {
+    authorName = nameInput ? nameInput.value.trim() : '';
+    if (!authorName) {
+      if (nameInput) nameInput.focus();
+      return;
+    }
+  }
+
+  if (DEMO_MODE) {
+    if (admin && passcode !== DEMO_PASSCODE) {
+      alert('비밀번호가 올바르지 않아요.');
+      return;
+    }
+    const comments = demoLoadComments();
+    comments.push({
+      id: Date.now(),
+      entry_id: entryId,
+      author_name: admin ? null : authorName,
+      is_admin: admin,
+      message,
+      created_at: new Date().toISOString(),
+    });
+    demoSaveComments(comments);
+    commentsCache.delete(entryId);
+    await ensureCommentsLoaded(entryId);
+    const rows = demoLoadEntries();
+    const target = rows.find((r) => r.id === entryId);
+    if (target) { target.comment_count = (target.comment_count || 0) + 1; demoSaveEntries(rows); }
+    await loadEntries();
+    return;
+  }
+
+  const { error } = await client.rpc('create_guestbook_comment', {
+    p_entry_id: entryId,
+    p_message: message,
+    p_author_name: admin ? null : authorName,
+    p_passcode: admin ? passcode : null,
+  });
+  if (error) {
+    console.error(error);
+    alert('댓글을 남기지 못했어요. 비밀번호를 확인해주세요.');
+    return;
+  }
+  commentsCache.delete(entryId);
+  await ensureCommentsLoaded(entryId);
+  await loadEntries();
+});
+
+async function ensureCommentsLoaded(entryId) {
+  if (commentsCache.has(entryId)) return;
+  if (DEMO_MODE) {
+    const rows = demoLoadComments().filter((c) => c.entry_id === entryId);
+    commentsCache.set(entryId, rows);
+    return;
+  }
+  const { data, error } = await client
+    .from('guestbook_comments')
+    .select('id, author_name, message, is_admin, created_at')
+    .eq('entry_id', entryId)
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('댓글 로드 실패', error);
+    commentsCache.set(entryId, []);
+    return;
+  }
+  commentsCache.set(entryId, data);
+}
+
 els.entries.addEventListener('click', async (e) => {
   const img = e.target.closest('.entry-image');
   if (img) {
     openLightbox(img.src);
+    return;
+  }
+
+  const commentToggleBtn = e.target.closest('.comment-toggle-btn');
+  if (commentToggleBtn) {
+    const id = Number(commentToggleBtn.dataset.id);
+    if (openCommentEntryId === id) {
+      openCommentEntryId = null;
+    } else {
+      openCommentEntryId = id;
+      await ensureCommentsLoaded(id);
+    }
+    renderEntries(lastEntriesData);
+    return;
+  }
+
+  const commentDelBtn = e.target.closest('.comment-del');
+  if (commentDelBtn) {
+    const commentId = Number(commentDelBtn.dataset.id);
+    const entryId = Number(e.target.closest('.entry').dataset.id);
+    const passcode = window.prompt('삭제하려면 관리자 비밀번호를 입력하세요.');
+    if (!passcode) return;
+
+    if (DEMO_MODE) {
+      if (passcode !== DEMO_PASSCODE) {
+        alert('비밀번호가 올바르지 않아요.');
+        return;
+      }
+      demoSaveComments(demoLoadComments().filter((c) => c.id !== commentId));
+      commentsCache.delete(entryId);
+      await ensureCommentsLoaded(entryId);
+      const rows = demoLoadEntries();
+      const target = rows.find((r) => r.id === entryId);
+      if (target) { target.comment_count = Math.max((target.comment_count || 0) - 1, 0); demoSaveEntries(rows); }
+      await loadEntries();
+      return;
+    }
+
+    const { data, error } = await client.rpc('delete_guestbook_comment', { p_id: commentId, p_passcode: passcode });
+    if (error || !data) {
+      alert('삭제하지 못했어요. 비밀번호를 확인해주세요.');
+      return;
+    }
+    commentsCache.delete(entryId);
+    await ensureCommentsLoaded(entryId);
+    await loadEntries();
     return;
   }
 
@@ -1048,6 +1261,55 @@ els.entries.addEventListener('click', async (e) => {
 
 els.pMessage.addEventListener('input', () => {
   els.postCharCount.textContent = `${els.pMessage.value.length} / 280`;
+  detectPostYoutubeLink();
+});
+
+let postYoutubeDetected = null; // { youtube_id, title, thumbnail }
+let postYoutubeDismissed = false;
+let lastDetectedYoutubeId = null;
+
+function showPostYtPreview(detected) {
+  postYoutubeDetected = detected;
+  if (!detected) {
+    els.postYtPreview.hidden = true;
+    return;
+  }
+  els.postYtPreviewThumb.style.backgroundImage = detected.thumbnail ? `url("${detected.thumbnail}")` : '';
+  els.postYtPreviewTitle.textContent = detected.title || '유튜브 영상';
+  els.postYtPreview.hidden = false;
+}
+
+async function detectPostYoutubeLink() {
+  const youtubeId = extractYoutubeId(els.pMessage.value);
+  if (youtubeId === lastDetectedYoutubeId) return;
+  lastDetectedYoutubeId = youtubeId;
+  postYoutubeDismissed = false;
+
+  if (!youtubeId) {
+    showPostYtPreview(null);
+    return;
+  }
+
+  let title = '';
+  let thumbnail = '';
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(`https://youtu.be/${youtubeId}`)}&format=json`);
+    if (res.ok) {
+      const meta = await res.json();
+      title = meta.title || '';
+      thumbnail = meta.thumbnail_url || '';
+    }
+  } catch (err) {
+    console.warn('유튜브 정보를 가져오지 못했어요', err);
+  }
+
+  if (youtubeId !== lastDetectedYoutubeId || postYoutubeDismissed) return;
+  showPostYtPreview({ youtube_id: youtubeId, title, thumbnail });
+}
+
+els.postYtPreviewRemove.addEventListener('click', () => {
+  postYoutubeDismissed = true;
+  showPostYtPreview(null);
 });
 
 const MAX_POST_IMAGES = 4;
@@ -1135,6 +1397,9 @@ els.postForm.addEventListener('submit', async (e) => {
       id: Date.now(),
       message,
       image_urls: selectedPostImages.map((item) => item.dataUrl),
+      youtube_id: postYoutubeDetected?.youtube_id || null,
+      youtube_title: postYoutubeDetected?.title || null,
+      youtube_thumbnail: postYoutubeDetected?.thumbnail || null,
       created_at: new Date().toISOString(),
     });
     demoSavePosts(rows);
@@ -1157,6 +1422,9 @@ els.postForm.addEventListener('submit', async (e) => {
     const { data, error } = await client.rpc('create_post', {
       p_message: message,
       p_image_urls: imageUrls,
+      p_youtube_id: postYoutubeDetected?.youtube_id || null,
+      p_youtube_title: postYoutubeDetected?.title || null,
+      p_youtube_thumbnail: postYoutubeDetected?.thumbnail || null,
       p_passcode: passcode,
     });
     if (error || !data) {
@@ -1170,6 +1438,9 @@ els.postForm.addEventListener('submit', async (e) => {
   els.postForm.reset();
   els.postCharCount.textContent = '0 / 280';
   clearPostMediaSelection();
+  lastDetectedYoutubeId = null;
+  postYoutubeDismissed = false;
+  showPostYtPreview(null);
   await loadPosts();
 });
 
